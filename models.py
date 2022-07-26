@@ -16,5 +16,5 @@ class User(models.Model):
     
 
 User_Pydantic = pydantic_model_creator(User, name="User") #pydantic model for tortoise
-UserIn_Pydantic = pydantic_model_creator(User, name="UserIn", exclude_readonly=True)  #automatically increments the primary key
+UserIn_Pydantic = pydantic_model_creator(User, name="UserIn", exclude_readonly=True)  #does not take read only values
 
