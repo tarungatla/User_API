@@ -1,6 +1,7 @@
 import os
 from fastapi import FastAPI, HTTPException,status,Depends
-from models import Name_Pydantic, User, UserIn_Pydantic, User_Pydantic, UserDetails_Pydantic
+from sqlalchemy import false
+from models import  User, UserIn_Pydantic, User_Pydantic
 from tortoise.contrib.fastapi import HTTPNotFoundError, register_tortoise
 from pydantic import BaseModel
 from jose import JWTError, jwt
@@ -29,9 +30,47 @@ class Form(BaseModel):
     email: str
     password: str
 
+class Name(BaseModel):
+    first_name: str
+    middle_name: str
+    last_name:str
+
+class User_Details(BaseModel):
+    email: str
+    phone: str
+    password: str
+    first_name: str
+    last_name: str
+    middle_name: str
+
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/user/login")
+
+def password_check(passwd):
+
+	SpecialSym =['!','"','#','$','%','&','(',')','*','+',',','-','.','/',':',';','<','=','>','?','@','[',']','^','_','`','{','|','}','~']
+	
+	if len(passwd) < 8:
+		return 'Password should have at least 8 characters'
+		
+	if len(passwd) > 16:
+		return 'Password can have at most 16 characters'
+		
+	if not any(char.isdigit() for char in passwd):
+		return 'Password should have at least one numeral'
+		
+	if not any(char.isupper() for char in passwd):
+		return 'Password should have at least one uppercase letter'
+		
+	if not any(char.islower() for char in passwd):
+		return 'Password should have at least one lowercase letter'
+		
+	if not any(char in SpecialSym for char in passwd):
+		return 'Password should have at least special character'
+	
+	return 'ok'
 
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
@@ -96,7 +135,7 @@ async def get_user(user_id: int, token:str = Depends(oauth2_scheme)):
     }
 
 @app.post('/api/v1/users/')               #created and updated will not be sent to response
-async def create(user: UserDetails_Pydantic, token:str = Depends(oauth2_scheme)):
+async def create(user: User_Details, token:str = Depends(oauth2_scheme)):
     is_valid = validate_email(user.email)
     try:
         user = await User.get(email=user.email) 
@@ -122,9 +161,10 @@ async def create(user: UserDetails_Pydantic, token:str = Depends(oauth2_scheme))
                 temp1 = UserIn_Pydantic(**temp)
                 obj = await User.create(**temp1.dict(exclude_unset=True))  #exlcudes the unset fields i.e user_id https://pydantic-docs.helpmanual.io/usage/exporting_models/#modeldict
                 return {
+                    "user_id": obj.user_id,
                     "email": user.email,
                     "phone": user.phone,
-                    # "password": get_password_hash(user.password),
+                    "password": get_password_hash(user.password),
                     "first_name": user.first_name,
                     "last_name": user.last_name,
                     "middle_name": user.middle_name,
@@ -132,11 +172,11 @@ async def create(user: UserDetails_Pydantic, token:str = Depends(oauth2_scheme))
                     "status": "active"  #send string valuess like acitve deleted 
                     }
                 #    return await User_Pydantic.from_tortoise_orm(obj)            #created and updated will not be returned
-            else: raise HTTPException(status_code=404, detail="Email is not valid")
+            else: raise HTTPException(status_code=400, detail="Email is not valid")
 
 
 @app.put('/api/v1/users/{user_id}', responses={404: {"model": HTTPNotFoundError}})       #Name...........................
-async def update(user_id: int, user: Name_Pydantic, token:str = Depends(oauth2_scheme)):
+async def update(user_id: int, user: Name, token:str = Depends(oauth2_scheme)):
     try:
       obj = await User_Pydantic.from_queryset_single(User.get(user_id=user_id))
     except:
@@ -164,7 +204,7 @@ async def update(user_id: int, user: Name_Pydantic, token:str = Depends(oauth2_s
         "first_name": user.first_name,
         "last_name": user.last_name,
         "middle_name": user.middle_name,
-        "accessed": round(time()),
+        "accessed": temp["accessed"],
         "status": "active" 
     }
     # return await User_Pydantic.from_queryset_single(User.get(user_id=user_id))
@@ -183,21 +223,29 @@ async def delete(user_id: int, token:str = Depends(oauth2_scheme)):
 
 @app.post('/api/v1/users/changepassword/{user_id}')
 async def changePassword(user_id: int, password:Password, token:str = Depends(oauth2_scheme)):
-    user =  await User_Pydantic.from_queryset_single(User.get(user_id=user_id))
-    if(verify_password(password.old_password,user.password )):
-        user = await UserIn_Pydantic.from_queryset_single(User.get(user_id=user_id))
-        user.password = get_password_hash(password.new_password)
-        await User.filter(user_id= user_id).update(**user.dict(exclude_unset=True))  
-        return {"message":"Passowrd changed successfully","data":await User_Pydantic.from_queryset_single(User.get(user_id=user_id))}
-        
-    else:
-        raise HTTPException(status_code=401, detail="Wrong password")
+    try:
+        user =  await User_Pydantic.from_queryset_single(User.get(user_id=user_id))
+        if(verify_password(password.old_password,user.password )):
+            user = await UserIn_Pydantic.from_queryset_single(User.get(user_id=user_id))
+            flag = password_check(password.new_password)
+            if flag == 'ok':
+                user.password = get_password_hash(password.new_password)
+                await User.filter(user_id= user_id).update(**user.dict(exclude_unset=True))  
+                return {"message":"Passowrd changed successfully","data":await User_Pydantic.from_queryset_single(User.get(user_id=user_id))}   
+            else:
+                return {"detail" : flag}
+        else:
+            raise HTTPException(status_code=401, detail="Wrong password")
+    except:
+        raise HTTPException(status_code=404, detail="User not found")
 
 
 
 async def authenticate_user( email: str, password: str):
     try:
       user = await User_Pydantic.from_queryset_single(User.get(email=email))
+      if user.status == 3:
+        return False
     except:
       return False
     if not verify_password(password, user.password):
@@ -262,8 +310,6 @@ register_tortoise(
     generate_schemas=True,
     add_exception_handlers=True,
 )
-
-
 
 
 #Table for adding  extra values
